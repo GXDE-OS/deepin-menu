@@ -1,3 +1,9 @@
+deepin-menu (2:3.4.9) UNRELEASED; urgency=medium
+
+  * 修改版本号
+
+ -- gfdgd_xi <3025613752@qq.com>  Sat, 31 May 2025 12:27:40 +0800
+
 deepin-menu (15.14~3.4.8-1) unstable; urgency=low
 
   * ['Autobuild release-candidate: acc42e93bf217115c2d2310e4c421f9090c017fc']

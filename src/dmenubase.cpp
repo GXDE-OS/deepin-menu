@@ -38,6 +38,7 @@
 #include "dmenubase.h"
 #include "dmenucontent.h"
 #include "utils.h"
+#include "waylandhelper.h"
 
 #define GRAB_FOCUS_TRY_TIMES 100
 
@@ -49,7 +50,10 @@ DMenuBase::DMenuBase(QWidget *parent) :
 {
     this->setAttribute(Qt::WA_TranslucentBackground);
 
-    queryXIExtension();
+    // XInput2仅X11可用
+    if (!WaylandHelper::isWayland()) {
+        queryXIExtension();
+    }
 
     _dropShadow = new QGraphicsDropShadowEffect(this);
     _dropShadow->setColor(QColor::fromRgbF(0, 0, 0, 0.2));
@@ -254,6 +258,13 @@ bool DMenuBase::grabFocusInternal(int tryTimes)
     if (!window)
         if (const QWidget *nativeParent = this->menuContent()->nativeParentWidget())
             window = nativeParent->windowHandle();
+
+    // 依旧是Wayland兼容性paatch
+    if (WaylandHelper::isWayland()) {
+        this->menuContent()->grabKeyboard();
+        return true;
+    }
+
     // grab pointer
     int i = 0;
     while(!window->setMouseGrabEnabled(true) && i < tryTimes) {

@@ -27,7 +27,33 @@
 #include <QTimer>
 #include <QApplication>
 #include <QScreen>
+#include <QPainter>
+#include <QMouseEvent>
+#include <functional>
 #include <qpa/qplatformscreen.h>
+
+#include "waylandhelper.h"
+
+namespace {
+
+// Wayland下的全屏遮罩
+class WlMaskWidget : public QWidget {
+public:
+    std::function<void()> onPress;
+
+protected:
+    void mousePressEvent(QMouseEvent *) override {
+        if (onPress) {
+            onPress();
+        }
+    }
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor(0, 0, 0, 1));
+    }
+};
+
+}  // namespace
 
 DDesktopMenu::DDesktopMenu()
     : QMenu()
@@ -38,6 +64,14 @@ DDesktopMenu::DDesktopMenu()
     // NOTE(hualet): don't change those window flags, if you delete below line, deepin-menu
     // won't even show working with deepin-terminal2 and dde-launcher.
     setWindowFlags(Qt::WindowStaysOnTopHint | Qt::Tool);
+
+    // Wayland下调整半透明并设置圆角
+    // DDockMenu通过DMenuBase已设置WA_TranslucentBackground
+    // 而DDesktopMenu缺少此属性导致Wayland buffer为XRGB格式
+    // 缺少的alpha通道似乎导致四角无法透明
+    if (WaylandHelper::isWayland()) {
+        setAttribute(Qt::WA_TranslucentBackground);
+    }
 
     connect(m_monitor, &DRegionMonitor::buttonPress, this, [=] (const QPoint &p) {
         for (auto *menu : m_ownMenus)
@@ -52,6 +86,10 @@ DDesktopMenu::~DDesktopMenu()
 {
     m_monitor->unregisterRegion();
     releaseKeyboard();
+    if (m_wlMask) {
+        m_wlMask->deleteLater();
+        m_wlMask = nullptr;
+    }
 }
 
 void DDesktopMenu::setItems(QJsonArray items)
@@ -90,31 +128,84 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
         handlePos = pos * devicePixelRatioF();
     }
 
-    // 因为.dde_env已经不包含qt的缩放环境变量，所以收到的都是原始坐标
-    QList<QScreen *> oldList = qApp->screens();
+    if (!WaylandHelper::isWayland()) {
+        // X11下走原逻辑
+        // 因为.dde_env已经不包含qt的缩放环境变量，所以收到的都是原始坐标
+        QList<QScreen *> oldList = qApp->screens();
+        for (auto it = oldList.constBegin(); it != oldList.constEnd(); ++it) {
+            QScreen const * currentScreen = (*it);
+            QRect rect = currentScreen->handle()->geometry();
+            const QPoint point = rect.topLeft();
 
-    // 得到坐标所在的屏幕
-    for (auto it = oldList.constBegin(); it != oldList.constEnd(); ++it) {
-        QScreen const * currentScreen = (*it);
-        QRect rect = currentScreen->handle()->geometry();
-        const QPoint point = rect.topLeft();
-
-        if (rect.contains(handlePos)) {
-            // 计算接收坐标距离当前屏幕左边缘的长宽
-            // 保持原始的topleft和在当前屏幕内坐标的偏移就可以正常显示了
-            QMenu::popup(QPoint(rect.topLeft() + (handlePos - point) / devicePixelRatioF()));
-            break;
+            if (rect.contains(handlePos)) {
+                // 保持原始的topleft和在当前屏幕内坐标的偏移就可以正常显示了
+                QMenu::popup(QPoint(rect.topLeft() + (handlePos - point) / devicePixelRatioF()));
+                break;
+            }
         }
+        return;
     }
+
+    // Wayland下没有父surface的QMenu，xdg_popup没法用（定位错乱问题）
+    // 备用workaround: 用layer-shell把菜单锚定到(x,y)，并加全屏遮罩
+    // 遮罩视为菜单外部，点击遮罩等效于「点击菜单外部关闭」
+    // 菜单外观一律交给Chameleon/「云璃」平台样式
+    ensurePolished();
+    const QSize sz = sizeHint();
+
+    QScreen* scr = qApp->screenAt(handlePos);
+    if (!scr) {
+        scr = qApp->primaryScreen();
+    }
+
+    QPoint topLeft = handlePos;
+    if (scr) {
+        const QRect g = scr->geometry();
+        topLeft.setX(qBound(g.left(), topLeft.x(), qMax(g.left(),
+            g.right() - sz.width())));
+        topLeft.setY(qBound(g.top(), topLeft.y(), qMax(g.top(),
+            g.bottom() - sz.height())));
+    }
+
+    // 全屏遮罩先于菜单建好显示，防止层级错位
+    if (!m_wlMask) {
+        WlMaskWidget *mask = new WlMaskWidget;
+        mask->setAttribute(Qt::WA_TranslucentBackground);
+        mask->setWindowFlags(Qt::FramelessWindowHint |
+            Qt::WindowDoesNotAcceptFocus);
+        mask->onPress = [this] { hide(); };
+        m_wlMask = mask;
+    }
+
+    if (scr) {
+        m_wlMask->setGeometry(scr->geometry());
+    }
+
+    WaylandHelper::setFullscreenMaskRole(m_wlMask);
+    m_wlMask->show();
+
+    // 先用非零尺寸建好带anchor的layer表面，再处理弹出菜单
+    createWinId();
+    resize(sz);
+    WaylandHelper::setMenuLayerRole(this, topLeft);
+
+    QMenu::popup(topLeft);
 }
 
 void DDesktopMenu::showEvent(QShowEvent *e)
 {
     QMenu::showEvent(e);
 
-    m_monitor->registerRegion();
+    // Wayland(下DRegionMonitor收不到全局点击，由全屏遮罩负责「点击外部关闭」
+    if (!WaylandHelper::isWayland()) {
+        // X11保持原版逻辑
+        m_monitor->registerRegion();
+    }
 
     QTimer::singleShot(100, this, [=] {
+        if (!isVisible()) {
+            return;
+        }
         activateWindow();
         grabKeyboard();
     });
@@ -124,6 +215,9 @@ void DDesktopMenu::hideEvent(QHideEvent *e)
 {
     QMenu::hideEvent(e);
 
+    if (m_wlMask) {
+        m_wlMask->hide();
+    }
     m_monitor->unregisterRegion();
     releaseKeyboard();
 }

@@ -22,6 +22,8 @@
 #include <DApplication>
 #include <DLog>
 
+#include <LayerShellQt/Shell>
+
 #include "dbus_manager_adaptor.h"
 #include "manager_object.h"
 #include "dmenuapplication.h"
@@ -34,7 +36,12 @@ DWIDGET_USE_NAMESPACE
 
 int main(int argc, char *argv[])
 {
-    DApplication::loadDXcbPlugin();
+    if (qgetenv("XDG_SESSION_TYPE") == "wayland") {
+        qputenv("QT_QPA_PLATFORM", "wayland");
+        LayerShellQt::Shell::useLayerShell();
+    } else {
+        DApplication::loadDXcbPlugin();
+    }
     DMenuApplication app(argc, argv);
     app.setOrganizationName("deepin");
     app.setApplicationName("deepin-menu");

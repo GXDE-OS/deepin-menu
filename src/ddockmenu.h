@@ -47,6 +47,8 @@ public:
 
     void releaseFocus() Q_DECL_OVERRIDE;
 
+    void show(int x, int y);
+
     void destroyAll();
 
 signals:
@@ -61,10 +63,12 @@ private:
     void showSubMenu(int x, int y, const QJsonObject &obj );
 
 protected:
+    void paintEvent(QPaintEvent *event) Q_DECL_OVERRIDE;
     bool event(QEvent *event) Q_DECL_OVERRIDE;
     void showEvent(QShowEvent *e) Q_DECL_OVERRIDE;
     void hideEvent(QHideEvent *event) Q_DECL_OVERRIDE;
     void mouseMoveEvent(QMouseEvent *event) Q_DECL_OVERRIDE;
+    void mouseReleaseEvent(QMouseEvent *event) Q_DECL_OVERRIDE;
     void keyPressEvent(QKeyEvent *event);
 
 private:
@@ -76,6 +80,8 @@ private:
     ItemStyle inactiveStyle;
     DRegionMonitor *m_monitor;
     DWindowManagerHelper *m_wmHelper;
+    QWidget *m_wlMask = nullptr;
+    bool m_wlFlatBg = false;
 };
 
 #endif // DDOCKMENU_H

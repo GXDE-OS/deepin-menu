@@ -17,6 +17,10 @@ TEMPLATE = app
 CONFIG += c++11 link_pkgconfig
 PKGCONFIG += dtkwidget
 
+# Wayland下使用layer-shell-qt5
+INCLUDEPATH += /usr/include/LayerShellQt
+LIBS += -lLayerShellQtInterface
+
 SOURCES += src/main.cpp \
     src/ddesktopmenu.cpp \
     src/utils.cpp \
@@ -27,7 +31,8 @@ SOURCES += src/main.cpp \
     src/menu_object.cpp \
     src/ddockmenu.cpp \
     src/dmenuapplication.cpp \
-    src/dabstractmenu.cpp
+    src/dabstractmenu.cpp \
+    src/waylandhelper.cpp
 
 HEADERS  += \
     src/ddesktopmenu.h \
@@ -39,7 +44,8 @@ HEADERS  += \
     src/menu_object.h \
     src/ddockmenu.h \
     src/dmenuapplication.h \
-    src/dabstractmenu.h
+    src/dabstractmenu.h \
+    src/waylandhelper.h
 
 dbus.path = /usr/share/dbus-1/services
 dbus.files = data/com.deepin.menu.service

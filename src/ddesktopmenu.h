@@ -55,6 +55,7 @@ private:
     void addActionFromJson(QMenu *menu, const QJsonArray &items);
     DRegionMonitor *m_monitor;
     QList<QMenu*> m_ownMenus;
+    QWidget* m_wlMask = nullptr;
 };
 
 #endif // DDESKTOPMENU_H

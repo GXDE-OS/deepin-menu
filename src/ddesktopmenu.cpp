@@ -212,6 +212,12 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     resize(sz);
     WaylandHelper::setMenuLayerRole(this, anchor);
 
+    // 菜单内容开启背景模糊
+    const QRect blurRegion(kWlShadowMargin, kWlShadowMargin,
+        sz.width() - 2 * kWlShadowMargin,
+        sz.height() - 2 * kWlShadowMargin);
+    m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
+
     QMenu::popup(anchor);
 }
 
@@ -284,7 +290,12 @@ void DDesktopMenu::paintEvent(QPaintEvent* event) {
     painter.restore();
 
     // 圆角&边框
-    painter.fillPath(bgPath, palette().color(QPalette::Window));
+    // 开了模糊把背景画半透明
+    QColor bgColor = palette().color(QPalette::Window);
+    if (m_wlBlur) {
+        bgColor.setAlphaF(0.6);
+    }
+    painter.fillPath(bgPath, bgColor);
     painter.strokePath(bgPath, QPen(QColor(0, 0, 0, 20), 1));
 
     // 菜单项

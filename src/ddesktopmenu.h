@@ -57,6 +57,7 @@ private:
     DRegionMonitor *m_monitor;
     QList<QMenu*> m_ownMenus;
     QWidget* m_wlMask = nullptr;
+    bool m_wlBlur = false;
 };
 
 #endif // DDESKTOPMENU_H

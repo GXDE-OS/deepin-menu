@@ -19,6 +19,7 @@
 #define SRC_WAYLANDHELPER_H_
 
 #include <QPoint>
+#include <QRect>
 
 class QWidget;
 
@@ -29,6 +30,7 @@ bool isTreeland();
 bool isGLWorking();
 void setMenuLayerRole(QWidget* widget, const QPoint& pos);
 void setFullscreenMaskRole(QWidget* widget);
+bool enableBlur(QWidget* widget, const QRect& region);
 
 }  // namespace WaylandHelper
 

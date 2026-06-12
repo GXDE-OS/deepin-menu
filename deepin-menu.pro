@@ -21,6 +21,9 @@ PKGCONFIG += dtkwidget
 INCLUDEPATH += /usr/include/LayerShellQt
 LIBS += -lLayerShellQtInterface
 
+# Wayland走org_kde_kwin_blur作为模糊协议
+PKGCONFIG += wayland-client
+
 SOURCES += src/main.cpp \
     src/ddesktopmenu.cpp \
     src/utils.cpp \
@@ -32,7 +35,8 @@ SOURCES += src/main.cpp \
     src/ddockmenu.cpp \
     src/dmenuapplication.cpp \
     src/dabstractmenu.cpp \
-    src/waylandhelper.cpp
+    src/waylandhelper.cpp \
+    src/kde-blur-protocol.c
 
 HEADERS  += \
     src/ddesktopmenu.h \
@@ -45,7 +49,8 @@ HEADERS  += \
     src/ddockmenu.h \
     src/dmenuapplication.h \
     src/dabstractmenu.h \
-    src/waylandhelper.h
+    src/waylandhelper.h \
+    src/kde-blur-client-protocol.h
 
 dbus.path = /usr/share/dbus-1/services
 dbus.files = data/com.deepin.menu.service

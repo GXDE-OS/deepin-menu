@@ -27,6 +27,7 @@
 #include <QTimer>
 #include <QApplication>
 #include <QScreen>
+#include <QCursor>
 #include <QPainter>
 #include <QPainterPath>
 #include <QImage>
@@ -88,8 +89,13 @@ DDesktopMenu::DDesktopMenu()
     // 缺少的alpha通道似乎导致四角无法透明
     if (WaylandHelper::isWayland()) {
         setAttribute(Qt::WA_TranslucentBackground);
-        setContentsMargins(kWlShadowMargin, kWlShadowMargin,
-            kWlShadowMargin, kWlShadowMargin);
+        m_treeland = WaylandHelper::isTreeland();
+        // 非Treeland自绘阴影需要透明padding
+        // 用dde_shell按光标定位时, 合成器把surface左上角对到光标
+        // 导致菜单看着离光标很远，处理这个
+        if (!m_treeland) {
+            setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
+        }
     }
 
     connect(m_monitor, &DRegionMonitor::buttonPress, this, [=] (const QPoint &p) {
@@ -203,20 +209,29 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     WaylandHelper::setFullscreenMaskRole(m_wlMask);
     m_wlMask->show();
 
-    // Wayland下处理layer-shell的padding
-    const QPoint anchor(qMax(0, topLeft.x() - kWlShadowMargin),
-        qMax(0, topLeft.y() - kWlShadowMargin));
+    // 无dde-shell可用时把锚点固定在左上角
+    const QPoint anchor = topLeft;
 
     // 先用非零尺寸建好带anchor的layer表面，再处理弹出菜单
     createWinId();
     resize(sz);
     WaylandHelper::setMenuLayerRole(this, anchor);
 
-    // 菜单内容开启背景模糊
-    const QRect blurRegion(kWlShadowMargin, kWlShadowMargin,
-        sz.width() - 2 * kWlShadowMargin,
-        sz.height() - 2 * kWlShadowMargin);
-    m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
+    // handlePos交由WM处理，通过窗口位置+汉堡菜单按钮的相对位置合成出汉堡菜单实际位置
+    // 合成器支持dde-shell即生效，否则则使用上述锚设置
+    WaylandHelper::placeMenuRelativeToWindow(this, handlePos.x(),
+        handlePos.y());
+
+    if (m_treeland) {
+        // Treeland: 圆角/阴影/模糊全部交给合成器
+        WaylandHelper::applyTreelandMenuStyle(this, kWlRadius);
+    } else {
+        // 非Treeland: 使用KDE Region Blur
+        const QRect blurRegion(0, 0,
+            sz.width() - kWlShadowMargin,
+            sz.height() - kWlShadowMargin);
+        m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
+    }
 
     QMenu::popup(anchor);
 }
@@ -267,8 +282,27 @@ void DDesktopMenu::paintEvent(QPaintEvent* event) {
         return;
     }
 
-    // Wayland下D-XCB不工作，准备自绘
-    const QRect content = rect().adjusted(kWlShadowMargin, kWlShadowMargin,
+    if (m_treeland) {
+        // Treeland: 圆角/阴影/模糊都由合成器负责
+        QColor bg = palette().color(QPalette::Window);
+        bg.setAlphaF(0.5);
+        QPainter painter(this);
+        painter.fillRect(rect(), bg);
+        for (QAction *action : actions()) {
+            const QRect g = actionGeometry(action);
+            if (g.isEmpty() || !event->rect().intersects(g)) {
+                continue;
+            }
+            QStyleOptionMenuItem opt;
+            initStyleOption(&opt, action);
+            opt.rect = g;
+            style()->drawControl(QStyle::CE_MenuItem, &opt, &painter, this);
+        }
+        return;
+    }
+
+    // Wayland下D-XCB不工作，准备自绘; 内容贴左上角, 阴影padding只在右下
+    const QRect content = rect().adjusted(0, 0,
         -kWlShadowMargin, -kWlShadowMargin);
     QPainterPath bgPath;
     bgPath.addRoundedRect(content, kWlRadius, kWlRadius);

@@ -29,6 +29,8 @@
 
 #include "waylandhelper.h"
 #include "kde-blur-client-protocol.h"
+#include "treeland-personalization-client-protocol.h"
+#include "treeland-dde-shell-client-protocol.h"
 
 namespace WaylandHelper {
 
@@ -141,11 +143,26 @@ namespace {
 struct wl_display* g_display = nullptr;
 struct wl_registry* g_registry = nullptr;
 struct org_kde_kwin_blur_manager* g_blurManager = nullptr;
+struct treeland_personalization_manager_v1* g_treelandManager = nullptr;
+struct treeland_dde_shell_manager_v1* g_ddeShellManager = nullptr;
 bool g_blurTried = false;
+
+// dde_shell_surface保活，菜单销毁时释放
+QHash<QObject*, treeland_dde_shell_surface_v1*>& getDdeShellSurfaces() {
+    static QHash<QObject*, treeland_dde_shell_surface_v1*> map;
+    return map;
+}
 
 // 用哈希表追踪每个widget对应的blur对象，便于确保在菜单销毁时全部释放
 QHash<QObject*, org_kde_kwin_blur*>& getBlurObjects() {
     static QHash<QObject*, org_kde_kwin_blur*> map;
+    return map;
+}
+
+// Treeland的window_context保活，菜单销毁时释放
+QHash<QObject*, treeland_personalization_window_context_v1*>&
+        getTreelandContexts() {
+    static QHash<QObject*, treeland_personalization_window_context_v1*> map;
     return map;
 }
 
@@ -160,6 +177,15 @@ void registryGlobal(void* data, struct wl_registry* reg, uint32_t name,
         g_blurManager = static_cast<struct org_kde_kwin_blur_manager*>(
             wl_registry_bind(reg, name, &org_kde_kwin_blur_manager_interface,
                 1));
+    } else if (qstrcmp(interface, "treeland_personalization_manager_v1") == 0) {
+        g_treelandManager =
+            static_cast<struct treeland_personalization_manager_v1*>(
+                wl_registry_bind(reg, name,
+                    &treeland_personalization_manager_v1_interface, 1));
+    } else if (qstrcmp(interface, "treeland_dde_shell_manager_v1") == 0) {
+        g_ddeShellManager = static_cast<struct treeland_dde_shell_manager_v1*>(
+            wl_registry_bind(reg, name,
+                &treeland_dde_shell_manager_v1_interface, 1));
     }
 }
 
@@ -267,6 +293,91 @@ bool enableBlur(QWidget* widget, const QRect& region)
     wl_region_destroy(reg);
 
     // release会让合成器移除模糊 (见kylin-wlcom kde_blur.c)
+    wl_display_flush(g_display);
+    return true;
+}
+
+bool applyTreelandMenuStyle(QWidget* widget, int radius) {
+    if (!widget || !isWayland()) {
+        return false;
+    }
+    ensureBlurMan();
+    if (!g_treelandManager) {
+        return false;
+    }
+
+    struct wl_surface* surface = wlSurfaceOf(widget);
+    if (!surface) {
+        return false;
+    }
+
+    // 复用已有context; 没有则新建并保活
+    treeland_personalization_window_context_v1* ctx =
+        getTreelandContexts().value(widget, nullptr);
+    if (!ctx) {
+        ctx = treeland_personalization_manager_v1_get_window_context(
+            g_treelandManager, surface);
+        if (!ctx) {
+            return false;
+        }
+        getTreelandContexts().insert(widget, ctx);
+
+        // 菜单销毁时释放context
+        QObject::connect(widget, &QObject::destroyed, [widget]() {
+            treeland_personalization_window_context_v1* c =
+                getTreelandContexts().take(widget);
+            if (c) {
+                treeland_personalization_window_context_v1_destroy(c);
+            }
+        });
+    }
+
+    treeland_personalization_window_context_v1_set_round_corner_radius(ctx,
+        radius);
+    treeland_personalization_window_context_v1_set_shadow(ctx, 20, 0, 6, 0, 0,
+        0, 60);
+    treeland_personalization_window_context_v1_set_blend_mode(
+        ctx, TREELAND_PERSONALIZATION_WINDOW_CONTEXT_V1_BLEND_MODE_BLUR);
+    wl_display_flush(g_display);
+    return true;
+}
+
+bool placeMenuRelativeToWindow(QWidget* widget, int x, int y) {
+    if (!widget || !isWayland()) {
+        return false;
+    }
+    ensureBlurMan();
+    if (!g_ddeShellManager) {
+        return false;
+    }
+
+    struct wl_surface* surface = wlSurfaceOf(widget);
+    if (!surface) {
+        return false;
+    }
+
+    // 复用已有shell surface; 没有则新建并保活
+    treeland_dde_shell_surface_v1* ss = getDdeShellSurfaces()
+        .value(widget, nullptr);
+
+    if (!ss) {
+        ss = treeland_dde_shell_manager_v1_get_shell_surface(
+            g_ddeShellManager, surface);
+        if (!ss) {
+            return false;
+        }
+        getDdeShellSurfaces().insert(widget, ss);
+
+        QObject::connect(widget, &QObject::destroyed, [widget]() {
+            treeland_dde_shell_surface_v1* s =
+                getDdeShellSurfaces().take(widget);
+            if (s) {
+                treeland_dde_shell_surface_v1_destroy(s);
+            }
+        });
+    }
+
+    treeland_dde_shell_surface_v1_set_surface_position(ss, x, y);
     wl_display_flush(g_display);
     return true;
 }

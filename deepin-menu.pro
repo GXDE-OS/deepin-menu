@@ -36,7 +36,9 @@ SOURCES += src/main.cpp \
     src/dmenuapplication.cpp \
     src/dabstractmenu.cpp \
     src/waylandhelper.cpp \
-    src/kde-blur-protocol.c
+    src/kde-blur-protocol.c \
+    src/treeland-personalization-protocol.c \
+    src/treeland-dde-shell-protocol.c
 
 HEADERS  += \
     src/ddesktopmenu.h \
@@ -50,7 +52,9 @@ HEADERS  += \
     src/dmenuapplication.h \
     src/dabstractmenu.h \
     src/waylandhelper.h \
-    src/kde-blur-client-protocol.h
+    src/kde-blur-client-protocol.h \
+    src/treeland-personalization-client-protocol.h \
+    src/treeland-dde-shell-client-protocol.h
 
 dbus.path = /usr/share/dbus-1/services
 dbus.files = data/com.deepin.menu.service

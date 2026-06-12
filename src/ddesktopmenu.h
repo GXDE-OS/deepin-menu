@@ -58,6 +58,7 @@ private:
     QList<QMenu*> m_ownMenus;
     QWidget* m_wlMask = nullptr;
     bool m_wlBlur = false;
+    bool m_treeland = false;
 };
 
 #endif // DDESKTOPMENU_H

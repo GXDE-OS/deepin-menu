@@ -155,7 +155,8 @@ void registryGlobal(void* data, struct wl_registry* reg, uint32_t name,
     Q_UNUSED(data);
     Q_UNUSED(version);
 
-    if (interface == "org_kde_kwin_blur_manager") {
+    // interface类型为const char*，必须用strcmp
+    if (qstrcmp(interface, "org_kde_kwin_blur_manager") == 0) {
         g_blurManager = static_cast<struct org_kde_kwin_blur_manager*>(
             wl_registry_bind(reg, name, &org_kde_kwin_blur_manager_interface,
                 1));
@@ -260,7 +261,7 @@ bool enableBlur(QWidget* widget, const QRect& region)
     struct wl_region* reg = wl_compositor_create_region(compositor);
     wl_region_add(reg, region.x(), region.y(), region.width(), region.height());
     org_kde_kwin_blur_set_region(blur, reg);
-    
+
     org_kde_kwin_blur_set_strength(blur, 2600);
     org_kde_kwin_blur_commit(blur);
     wl_region_destroy(reg);

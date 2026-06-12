@@ -30,6 +30,7 @@
 #include <QScreen>
 #include <QWidget>
 #include <QMouseEvent>
+#include <QTimer>
 #include <functional>
 #include <DBlurEffectWidget>
 

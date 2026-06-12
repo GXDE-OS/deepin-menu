@@ -26,6 +26,7 @@
 #include <DWindowManagerHelper>
 
 DWIDGET_USE_NAMESPACE
+DGUI_USE_NAMESPACE
 
 struct ItemStyle {
     QColor itemBackgroundColor;

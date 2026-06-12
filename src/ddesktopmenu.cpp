@@ -28,13 +28,30 @@
 #include <QApplication>
 #include <QScreen>
 #include <QPainter>
+#include <QPainterPath>
+#include <QImage>
 #include <QMouseEvent>
+#include <QStyle>
+#include <QStyleOptionMenuItem>
 #include <functional>
 #include <qpa/qplatformscreen.h>
 
 #include "waylandhelper.h"
 
+// 阴影和圆角在Wayland下不工作，XCB的方案走了qt_blurImage，是QtWidgets导出的内部函数
+// header根本找不着，只能前向声明了
+QT_BEGIN_NAMESPACE
+void qt_blurImage(QPainter* p, QImage& blurImage, qreal radius, bool quality,
+    bool alphaOnly, int transposed = 0);
+QT_END_NAMESPACE
+
 namespace {
+
+// Wayland下手动处理圆角与阴影
+const int kWlRadius = 8;
+const int kWlShadowBlur = 8;
+const int kWlShadowOffsetY = 1;
+const int kWlShadowMargin = 16;
 
 // Wayland下的全屏遮罩
 class WlMaskWidget : public QWidget {
@@ -71,6 +88,8 @@ DDesktopMenu::DDesktopMenu()
     // 缺少的alpha通道似乎导致四角无法透明
     if (WaylandHelper::isWayland()) {
         setAttribute(Qt::WA_TranslucentBackground);
+        setContentsMargins(kWlShadowMargin, kWlShadowMargin,
+            kWlShadowMargin, kWlShadowMargin);
     }
 
     connect(m_monitor, &DRegionMonitor::buttonPress, this, [=] (const QPoint &p) {
@@ -184,12 +203,16 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     WaylandHelper::setFullscreenMaskRole(m_wlMask);
     m_wlMask->show();
 
+    // Wayland下处理layer-shell的padding
+    const QPoint anchor(qMax(0, topLeft.x() - kWlShadowMargin),
+        qMax(0, topLeft.y() - kWlShadowMargin));
+
     // 先用非零尺寸建好带anchor的layer表面，再处理弹出菜单
     createWinId();
     resize(sz);
-    WaylandHelper::setMenuLayerRole(this, topLeft);
+    WaylandHelper::setMenuLayerRole(this, anchor);
 
-    QMenu::popup(topLeft);
+    QMenu::popup(anchor);
 }
 
 void DDesktopMenu::showEvent(QShowEvent *e)
@@ -229,6 +252,53 @@ void DDesktopMenu::keyPressEvent(QKeyEvent *event)
     }
 
     QMenu::keyPressEvent(event);
+}
+
+void DDesktopMenu::paintEvent(QPaintEvent* event) {
+    if (!WaylandHelper::isWayland()) {
+        // X11下圆角与阴影由dxcb设置
+        QMenu::paintEvent(event);
+        return;
+    }
+
+    // Wayland下D-XCB不工作，准备自绘
+    const QRect content = rect().adjusted(kWlShadowMargin, kWlShadowMargin,
+        -kWlShadowMargin, -kWlShadowMargin);
+    QPainterPath bgPath;
+    bgPath.addRoundedRect(content, kWlRadius, kWlRadius);
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    // 阴影，参考XCB原版的绘制方案
+    QImage shadow(size(), QImage::Format_ARGB32_Premultiplied);
+    shadow.fill(Qt::transparent);
+    {
+        QPainter sp(&shadow);
+        sp.setRenderHint(QPainter::Antialiasing);
+        sp.fillPath(bgPath.translated(0, kWlShadowOffsetY), QColor(0, 0, 0));
+    }
+    painter.save();
+    painter.setOpacity(0.18);
+    qt_blurImage(&painter, shadow, kWlShadowBlur * 2.0, true, true);
+    painter.restore();
+
+    // 圆角&边框
+    painter.fillPath(bgPath, palette().color(QPalette::Window));
+    painter.strokePath(bgPath, QPen(QColor(0, 0, 0, 20), 1));
+
+    // 菜单项
+    painter.setClipPath(bgPath);
+    for (QAction *action : actions()) {
+        const QRect g = actionGeometry(action);
+        if (g.isEmpty() || !event->rect().intersects(g)) {
+            continue;
+        }
+        QStyleOptionMenuItem opt;
+        initStyleOption(&opt, action);
+        opt.rect = g;
+        style()->drawControl(QStyle::CE_MenuItem, &opt, &painter, this);
+    }
 }
 
 QAction *DDesktopMenu::action(const QString &id)

@@ -62,6 +62,10 @@ private:
     DDockMenu *getRootMenu();
     DDockMenu *menuUnderPoint(const QPoint point);
     void showSubMenu(int x, int y, const QJsonObject &obj );
+    // 平背景路径下给菜单加合成器模糊(treeland: personalization; wlroots: KDE blur)。
+    // surface 可能尚未就绪, scheduleBlur 延迟重试。
+    bool setupBlur();
+    void scheduleBlur(int attempt);
 
 protected:
     void paintEvent(QPaintEvent *event) Q_DECL_OVERRIDE;
@@ -83,6 +87,7 @@ private:
     DWindowManagerHelper *m_wmHelper;
     QWidget *m_wlMask = nullptr;
     bool m_wlFlatBg = false;
+    bool m_wlBlur = false;
 };
 
 #endif // DDOCKMENU_H

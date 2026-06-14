@@ -266,23 +266,22 @@ bool enableBlur(QWidget* widget, const QRect& region)
         return false;
     }
 
-    // 能复用blur时复用blur
-    org_kde_kwin_blur* blur = getBlurObjects().value(widget, nullptr);
-    if (!blur) {
-        blur = org_kde_kwin_blur_manager_create(g_blurManager, surface);
-        if (!blur) {
-            return false;
-        }
-        getBlurObjects().insert(widget, blur);
-
-        // 菜单销毁时释放blur对象
-        QObject::connect(widget, &QObject::destroyed, [widget]() {
-            org_kde_kwin_blur* b = getBlurObjects().take(widget);
-            if (b) {
-                org_kde_kwin_blur_release(b);
-            }
-        });
+    // 子菜单re-show时wl_surface会重建，重新blur
+    org_kde_kwin_blur* oldBlur = getBlurObjects().take(widget);
+    if (oldBlur) {
+        org_kde_kwin_blur_release(oldBlur);
     }
+    org_kde_kwin_blur* blur = org_kde_kwin_blur_manager_create(g_blurManager, surface);
+    if (!blur) {
+        return false;
+    }
+    getBlurObjects().insert(widget, blur);
+    QObject::connect(widget, &QObject::destroyed, [widget]() {
+        org_kde_kwin_blur* b = getBlurObjects().take(widget);
+        if (b) {
+            org_kde_kwin_blur_release(b);
+        }
+    });
 
     struct wl_region* reg = wl_compositor_create_region(compositor);
     wl_region_add(reg, region.x(), region.y(), region.width(), region.height());
@@ -311,33 +310,33 @@ bool applyTreelandMenuStyle(QWidget* widget, int radius) {
         return false;
     }
 
-    // 复用已有context; 没有则新建并保活
-    treeland_personalization_window_context_v1* ctx =
-        getTreelandContexts().value(widget, nullptr);
-    if (!ctx) {
-        ctx = treeland_personalization_manager_v1_get_window_context(
-            g_treelandManager, surface);
-        if (!ctx) {
-            return false;
-        }
-        getTreelandContexts().insert(widget, ctx);
-
-        // 菜单销毁时释放context
-        QObject::connect(widget, &QObject::destroyed, [widget]() {
-            treeland_personalization_window_context_v1* c =
-                getTreelandContexts().take(widget);
-            if (c) {
-                treeland_personalization_window_context_v1_destroy(c);
-            }
-        });
+    // 每次销毁旧context、按当前surface重建
+    treeland_personalization_window_context_v1* old = getTreelandContexts()
+        .take(widget);
+    if (old) {
+        treeland_personalization_window_context_v1_destroy(old);
     }
+    treeland_personalization_window_context_v1* ctx =
+        treeland_personalization_manager_v1_get_window_context(g_treelandManager, surface);
+    if (!ctx) {
+        return false;
+    }
+    getTreelandContexts().insert(widget, ctx);
+    // 菜单销毁时释放context
+    QObject::connect(widget, &QObject::destroyed, [widget]() {
+        treeland_personalization_window_context_v1* c = getTreelandContexts().take(widget);
+        if (c) {
+            treeland_personalization_window_context_v1_destroy(c);
+        }
+    });
 
     treeland_personalization_window_context_v1_set_round_corner_radius(ctx,
         radius);
-    treeland_personalization_window_context_v1_set_shadow(ctx, 20, 0, 6, 0, 0,
-        0, 60);
     treeland_personalization_window_context_v1_set_blend_mode(
         ctx, TREELAND_PERSONALIZATION_WINDOW_CONTEXT_V1_BLEND_MODE_BLUR);
+    // 显式把边框宽度设为0
+    treeland_personalization_window_context_v1_set_border(ctx, 0, 0, 0, 0, 0);
+
     wl_display_flush(g_display);
     return true;
 }
@@ -356,28 +355,64 @@ bool placeMenuRelativeToWindow(QWidget* widget, int x, int y) {
         return false;
     }
 
-    // 复用已有shell surface; 没有则新建并保活
-    treeland_dde_shell_surface_v1* ss = getDdeShellSurfaces()
-        .value(widget, nullptr);
-
-    if (!ss) {
-        ss = treeland_dde_shell_manager_v1_get_shell_surface(
-            g_ddeShellManager, surface);
-        if (!ss) {
-            return false;
-        }
-        getDdeShellSurfaces().insert(widget, ss);
-
-        QObject::connect(widget, &QObject::destroyed, [widget]() {
-            treeland_dde_shell_surface_v1* s =
-                getDdeShellSurfaces().take(widget);
-            if (s) {
-                treeland_dde_shell_surface_v1_destroy(s);
-            }
-        });
+    // 子菜单re-show时wl_surface会重建
+    treeland_dde_shell_surface_v1* old = getDdeShellSurfaces().take(widget);
+    if (old) {
+        treeland_dde_shell_surface_v1_destroy(old);
     }
+    treeland_dde_shell_surface_v1* ss =
+        treeland_dde_shell_manager_v1_get_shell_surface(g_ddeShellManager, surface);
+    if (!ss) {
+        return false;
+    }
+    getDdeShellSurfaces().insert(widget, ss);
+    QObject::connect(widget, &QObject::destroyed, [widget]() {
+        treeland_dde_shell_surface_v1* s = getDdeShellSurfaces().take(widget);
+        if (s) {
+            treeland_dde_shell_surface_v1_destroy(s);
+        }
+    });
 
     treeland_dde_shell_surface_v1_set_surface_position(ss, x, y);
+    wl_display_flush(g_display);
+    return true;
+}
+
+bool placeMenuAtCursor(QWidget* widget, int yOffset) {
+    if (!widget || !isWayland()) {
+        return false;
+    }
+    ensureBlurMan();
+    if (!g_ddeShellManager) {
+        return false;
+    }
+
+    struct wl_surface* surface = wlSurfaceOf(widget);
+    if (!surface) {
+        return false;
+    }
+
+    treeland_dde_shell_surface_v1* old = getDdeShellSurfaces().take(widget);
+    if (old) {
+        treeland_dde_shell_surface_v1_destroy(old);
+    }
+    treeland_dde_shell_surface_v1* ss =
+        treeland_dde_shell_manager_v1_get_shell_surface(
+            g_ddeShellManager, surface);
+    if (!ss) {
+        return false;
+    }
+    getDdeShellSurfaces().insert(widget, ss);
+    QObject::connect(widget, &QObject::destroyed, [widget]() {
+        treeland_dde_shell_surface_v1* s = getDdeShellSurfaces().take(widget);
+        if (s) {
+            treeland_dde_shell_surface_v1_destroy(s);
+        }
+    });
+
+    // 锁存全局光标位置，免得菜单跟鼠标一起飞
+    treeland_dde_shell_surface_v1_set_auto_placement(ss,
+        static_cast<uint32_t>(yOffset));
     wl_display_flush(g_display);
     return true;
 }

@@ -33,6 +33,7 @@ void setFullscreenMaskRole(QWidget* widget);
 bool enableBlur(QWidget* widget, const QRect& region);
 bool applyTreelandMenuStyle(QWidget* widget, int radius);
 bool placeMenuRelativeToWindow(QWidget* widget, int x, int y);
+bool placeMenuAtCursor(QWidget* widget, int yOffset);
 
 }  // namespace WaylandHelper
 

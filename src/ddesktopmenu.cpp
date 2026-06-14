@@ -34,6 +34,8 @@
 #include <QMouseEvent>
 #include <QStyle>
 #include <QStyleOptionMenuItem>
+#include <QPlatformSurfaceEvent>
+#include <QPointer>
 #include <functional>
 #include <qpa/qplatformscreen.h>
 
@@ -71,6 +73,142 @@ protected:
     }
 };
 
+// 非Treeland下的妥协方案
+// 样式/源码参考自X11下的样式
+void drawWlMenuDecoration(QWidget *w, QPainter &painter, bool blurOn) {
+    const QRect content =
+        w->rect().adjusted(0, 0, -kWlShadowMargin, -kWlShadowMargin);
+    QPainterPath bgPath;
+    bgPath.addRoundedRect(content, kWlRadius, kWlRadius);
+
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    QImage shadow(w->size(), QImage::Format_ARGB32_Premultiplied);
+    shadow.fill(Qt::transparent);
+    {
+        QPainter sp(&shadow);
+        sp.setRenderHint(QPainter::Antialiasing);
+        sp.fillPath(bgPath.translated(0, kWlShadowOffsetY), QColor(0, 0, 0));
+    }
+    painter.save();
+    painter.setOpacity(0.18);
+    qt_blurImage(&painter, shadow, kWlShadowBlur * 2.0, true, true);
+    painter.restore();
+
+    QColor bgColor = w->palette().color(QPalette::Window);
+    if (blurOn) {
+        bgColor.setAlphaF(0.6);
+    }
+    painter.fillPath(bgPath, bgColor);
+    painter.strokePath(bgPath, QPen(QColor(0, 0, 0, 20), 1));
+    painter.setClipPath(bgPath);
+}
+
+// Wayland下的子菜单如果还是普通QMenu就很乱飞了，而且样式也不对
+// Wayland下使用这个打补丁的WlSubMenu类
+class WlSubMenu : public QMenu {
+public:
+    explicit WlSubMenu(QWidget *parent) : QMenu(parent) {
+        if (WaylandHelper::isWayland()) {
+            setAttribute(Qt::WA_TranslucentBackground);
+            setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
+        }
+    }
+
+protected:
+    bool event(QEvent *e) override {
+        if (e->type() == QEvent::PlatformSurface) {
+            auto *se = static_cast<QPlatformSurfaceEvent *>(e);
+            if (se->surfaceEventType() ==
+                    QPlatformSurfaceEvent::SurfaceCreated) {
+                setupWayland();
+            }
+        }
+        return QMenu::event(e);
+    }
+
+    void showEvent(QShowEvent *e) override {
+        QMenu::showEvent(e);
+        // re-show时QtWayland不重建QPlatformWindow
+        scheduleSetup(0);
+    }
+
+    void paintEvent(QPaintEvent *e) override {
+        if (!WaylandHelper::isWayland()) {
+            QMenu::paintEvent(e);
+            return;
+        }
+        QPainter painter(this);
+        drawWlMenuDecoration(this, painter, m_wlBlur);
+        for (QAction *action : actions()) {
+            const QRect g = actionGeometry(action);
+            if (g.isEmpty() || !e->rect().intersects(g)) {
+                continue;
+            }
+            QStyleOptionMenuItem opt;
+            initStyleOption(&opt, action);
+            opt.rect = g;
+            style()->drawControl(QStyle::CE_MenuItem, &opt, &painter, this);
+        }
+    }
+
+private:
+    // 应用layer角色 + dde-shell按光标定位 + blur
+    bool setupWayland() {
+        if (!WaylandHelper::isWayland()) {
+            return true;
+        }
+        WaylandHelper::setMenuLayerRole(this, QPoint(0, 0));
+
+        // Treeland优先用personalization，非Treeland则回退到KDE blur
+        if (WaylandHelper::isTreeland()) {
+            m_wlBlur = WaylandHelper::applyTreelandMenuStyle(this, kWlRadius);
+        } else {
+            const QRect blurRegion(0, 0, width() - kWlShadowMargin,
+                height() - kWlShadowMargin);
+            m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
+        }
+
+        // 子菜单定位不能用Qt的global geometry，拿不到真实坐标, 是垃圾
+        // 自行计算
+        QPoint off(width() - kWlShadowMargin, 0);  // 兜底
+        if (QMenu *pm = qobject_cast<QMenu *>(parentWidget())) {
+            QRect ar;
+            for (QAction *a : pm->actions()) {
+                if (a->menu() == this) {
+                    ar = pm->actionGeometry(a);
+                    break;
+                }
+            }
+            off = QPoint(pm->width() - pm->contentsMargins().right(), ar.top());
+        }
+        const bool placed = WaylandHelper::placeMenuRelativeToWindow(this,
+                off.x(), off.y());
+        if (placed) {
+            update();
+        }
+        return placed;
+    }
+
+    // re-show时surface在show之后才就绪, 逐帧重试直到拿到surface(最多若干次)。
+    void scheduleSetup(int attempt) {
+        if (!WaylandHelper::isWayland() || attempt > 8) {
+            return;
+        }
+        QPointer<WlSubMenu> self(this);
+        QTimer::singleShot(0, this, [self, attempt]() {
+            if (!self || !self->isVisible()) {
+                return;
+            }
+            if (!self->setupWayland()) {
+                self->scheduleSetup(attempt + 1);
+            }
+        });
+    }
+
+    bool m_wlBlur = false;
+};
+
 }  // namespace
 
 DDesktopMenu::DDesktopMenu()
@@ -90,12 +228,7 @@ DDesktopMenu::DDesktopMenu()
     if (WaylandHelper::isWayland()) {
         setAttribute(Qt::WA_TranslucentBackground);
         m_treeland = WaylandHelper::isTreeland();
-        // 非Treeland自绘阴影需要透明padding
-        // 用dde_shell按光标定位时, 合成器把surface左上角对到光标
-        // 导致菜单看着离光标很远，处理这个
-        if (!m_treeland) {
-            setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
-        }
+        setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
     }
 
     connect(m_monitor, &DRegionMonitor::buttonPress, this, [=] (const QPoint &p) {
@@ -172,9 +305,7 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     }
 
     // Wayland下没有父surface的QMenu，xdg_popup没法用（定位错乱问题）
-    // 备用workaround: 用layer-shell把菜单锚定到(x,y)，并加全屏遮罩
-    // 遮罩视为菜单外部，点击遮罩等效于「点击菜单外部关闭」
-    // 菜单外观一律交给Chameleon/「云璃」平台样式
+    // 用layer-shell把菜单锚定，并加全屏遮罩负责「点击外部关闭」
     ensurePolished();
     const QSize sz = sizeHint();
 
@@ -192,7 +323,6 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
             g.bottom() - sz.height())));
     }
 
-    // 全屏遮罩先于菜单建好显示，防止层级错位
     if (!m_wlMask) {
         WlMaskWidget *mask = new WlMaskWidget;
         mask->setAttribute(Qt::WA_TranslucentBackground);
@@ -209,29 +339,27 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     WaylandHelper::setFullscreenMaskRole(m_wlMask);
     m_wlMask->show();
 
-    // 无dde-shell可用时把锚点固定在左上角
     const QPoint anchor = topLeft;
 
-    // 先用非零尺寸建好带anchor的layer表面，再处理弹出菜单
     createWinId();
     resize(sz);
     WaylandHelper::setMenuLayerRole(this, anchor);
 
-    // handlePos交由WM处理，通过窗口位置+汉堡菜单按钮的相对位置合成出汉堡菜单实际位置
-    // 合成器支持dde-shell即生效，否则则使用上述锚设置
-    WaylandHelper::placeMenuRelativeToWindow(this, handlePos.x(),
-        handlePos.y());
+    // 顶层菜单定位: treeland用绝对，其它用相对
+    if (m_treeland) {
+        WaylandHelper::placeMenuAtCursor(this, 0);
+    } else {
+        WaylandHelper::placeMenuRelativeToWindow(this, handlePos.x(), handlePos.y());
+    }
 
     if (m_treeland) {
-        // Treeland: 圆角/阴影/模糊全部交给合成器
-        WaylandHelper::applyTreelandMenuStyle(this, kWlRadius);
+        m_wlBlur = WaylandHelper::applyTreelandMenuStyle(this, kWlRadius);
     } else {
-        // 非Treeland: 使用KDE Region Blur
-        const QRect blurRegion(0, 0,
-            sz.width() - kWlShadowMargin,
-            sz.height() - kWlShadowMargin);
+        const QRect blurRegion(0, 0, sz.width() - kWlShadowMargin, sz.height() - kWlShadowMargin);
         m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
     }
+
+    QMenu::popup(anchor);
 
     QMenu::popup(anchor);
 }
@@ -282,58 +410,9 @@ void DDesktopMenu::paintEvent(QPaintEvent* event) {
         return;
     }
 
-    if (m_treeland) {
-        // Treeland: 圆角/阴影/模糊都由合成器负责
-        QColor bg = palette().color(QPalette::Window);
-        bg.setAlphaF(0.5);
-        QPainter painter(this);
-        painter.fillRect(rect(), bg);
-        for (QAction *action : actions()) {
-            const QRect g = actionGeometry(action);
-            if (g.isEmpty() || !event->rect().intersects(g)) {
-                continue;
-            }
-            QStyleOptionMenuItem opt;
-            initStyleOption(&opt, action);
-            opt.rect = g;
-            style()->drawControl(QStyle::CE_MenuItem, &opt, &painter, this);
-        }
-        return;
-    }
-
-    // Wayland下D-XCB不工作，准备自绘; 内容贴左上角, 阴影padding只在右下
-    const QRect content = rect().adjusted(0, 0,
-        -kWlShadowMargin, -kWlShadowMargin);
-    QPainterPath bgPath;
-    bgPath.addRoundedRect(content, kWlRadius, kWlRadius);
-
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
+    drawWlMenuDecoration(this, painter, m_wlBlur);
 
-    // 阴影，参考XCB原版的绘制方案
-    QImage shadow(size(), QImage::Format_ARGB32_Premultiplied);
-    shadow.fill(Qt::transparent);
-    {
-        QPainter sp(&shadow);
-        sp.setRenderHint(QPainter::Antialiasing);
-        sp.fillPath(bgPath.translated(0, kWlShadowOffsetY), QColor(0, 0, 0));
-    }
-    painter.save();
-    painter.setOpacity(0.18);
-    qt_blurImage(&painter, shadow, kWlShadowBlur * 2.0, true, true);
-    painter.restore();
-
-    // 圆角&边框
-    // 开了模糊把背景画半透明
-    QColor bgColor = palette().color(QPalette::Window);
-    if (m_wlBlur) {
-        bgColor.setAlphaF(0.6);
-    }
-    painter.fillPath(bgPath, bgColor);
-    painter.strokePath(bgPath, QPen(QColor(0, 0, 0, 20), 1));
-
-    // 菜单项
-    painter.setClipPath(bgPath);
     for (QAction *action : actions()) {
         const QRect g = actionGeometry(action);
         if (g.isEmpty() || !event->rect().intersects(g)) {
@@ -372,7 +451,10 @@ void DDesktopMenu::addActionFromJson(QMenu *menu, const QJsonArray &items)
         QAction *action = nullptr;
         if (subMenuItemsJson.count()) {
 
-            QMenu *subMenu = new QMenu(menu);
+            // Wayland下用WlSubMenu，X11用普通QMenu
+            QMenu *subMenu = WaylandHelper::isWayland()
+                ? static_cast<QMenu *>(new WlSubMenu(menu))
+                : new QMenu(menu);
             action = menu->addMenu(subMenu);
             addActionFromJson(subMenu, subMenuItemsJson);
         } else if (itemText.isEmpty()) {

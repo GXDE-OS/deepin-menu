@@ -16,6 +16,7 @@ Build-Depends: debhelper (>= 9),
  libqt5xdgiconloader-dev,
  libqt5svg5-dev,
  libwayland-dev,
+ liblayershellqtinterface5-dev,
 Standards-Version: 3.9.8
 Homepage: https://github.com/linuxdeepin/deepin-menu
 

@@ -83,7 +83,7 @@ void MenuObject::SetItemText(const QString &itemId, const QString &text)
 void MenuObject::ShowMenu(const QString &menuJsonContent)
 {
     QByteArray bytes;
-    bytes.append(menuJsonContent);
+    bytes.append(menuJsonContent.toUtf8());
     QJsonDocument menuDocument = QJsonDocument::fromJson(bytes);
     QJsonObject jsonObj = menuDocument.object();
 
@@ -102,7 +102,7 @@ void MenuObject::ShowMenu(const QString &menuJsonContent)
     }
 
     bytes.clear();
-    bytes.append(jsonObj["menuJsonContent"].toString());
+    bytes.append(jsonObj["menuJsonContent"].toString().toUtf8());
     QJsonDocument menuContent = QJsonDocument::fromJson(bytes);
     QJsonObject menuContentObj = menuContent.object();
 

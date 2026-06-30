@@ -4,20 +4,15 @@
 #
 #-------------------------------------------------
 
-QT       += core gui dbus
-
-greaterThan(QT_MINOR_VERSION, 7): QT += gui-private
-else: QT += platformsupport-private
-
-greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+QT       += core gui dbus gui-private widgets
 
 TARGET = deepin-menu
 TEMPLATE = app
 
 CONFIG += c++11 link_pkgconfig
-PKGCONFIG += dtkwidget
+PKGCONFIG += dtk2widget
 
-# Wayland下使用layer-shell-qt5
+# Wayland下使用layer-shell-qt6
 INCLUDEPATH += /usr/include/LayerShellQt
 LIBS += -lLayerShellQtInterface
 

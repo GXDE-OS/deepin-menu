@@ -3,9 +3,14 @@
 *.pyo
 deepin_menu.egg-info
 build
+build-qt6
 dist
 core
 *.o
 moc_*
 qrc_*.cpp
 deepin-menu.pro.user*
+.claude/*
+.codex/*
+.gemini/*
+.qwen/*

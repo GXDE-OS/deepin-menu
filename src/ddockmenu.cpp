@@ -26,6 +26,7 @@
 #include <QJsonObject>
 #include <QDebug>
 #include <QJsonArray>
+#include <QRegularExpression>
 #include <QApplication>
 #include <QScreen>
 #include <QWidget>
@@ -149,7 +150,7 @@ void DDockMenu::setItems(QJsonArray items)
         QJsonObject itemObj = item.toObject();
 
         QAction *action = new QAction(m_menuContent);
-        QString itemText = itemObj["itemText"].toString().replace("_", QString()).replace(QRegExp("\\([^)]+\\)"), QString());
+        QString itemText = itemObj["itemText"].toString().replace("_", QString()).replace(QRegularExpression("\\([^)]+\\)"), QString());
 
         action->setText(itemText);
         action->setEnabled(itemObj["isActive"].toBool());

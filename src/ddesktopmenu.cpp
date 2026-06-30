@@ -21,6 +21,7 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QDebug>
 #include <QKeyEvent>
 #include <QDBusPendingCall>
@@ -442,7 +443,7 @@ void DDesktopMenu::addActionFromJson(QMenu *menu, const QJsonArray &items)
 
     foreach (QJsonValue item, items) {
         QJsonObject itemObj = item.toObject();
-        const QString itemText = itemObj["itemText"].toString().replace("_", QString()).replace(QRegExp("\\([^)]+\\)"), QString());
+        const QString itemText = itemObj["itemText"].toString().replace("_", QString()).replace(QRegularExpression("\\([^)]+\\)"), QString());
         const QString itemIcon = itemObj["itemIcon"].toString();
 
         const QJsonObject subMenuJson = itemObj["itemSubMenu"].toObject();

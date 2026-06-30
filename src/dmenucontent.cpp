@@ -90,7 +90,7 @@ int DMenuContent::contentWidth()
     QFontMetrics metrics(font());
 
     foreach (QAction *action, this->actions()) {
-        result = qMax(result, metrics.width(action->text()));
+        result = qMax(result, metrics.horizontalAdvance(action->text()));
     }
 
     return qMin(MENU_ITEM_MAX_WIDTH, result + 10 + LeftRightPadding*2);
@@ -471,7 +471,7 @@ QString DMenuContent::elideText(QString source, int maxWidth) const
 {
     QFontMetrics metrics(font());
 
-    if (metrics.width(source) < maxWidth) {
+    if (metrics.horizontalAdvance(source) < maxWidth) {
         return source;
     } else {
         return metrics.elidedText(source, Qt::ElideRight, maxWidth);

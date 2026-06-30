@@ -111,6 +111,7 @@ class WlSubMenu : public QMenu {
 public:
     explicit WlSubMenu(QWidget *parent) : QMenu(parent) {
         if (WaylandHelper::isWayland()) {
+            setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
             setAttribute(Qt::WA_TranslucentBackground);
             setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
         }
@@ -227,6 +228,10 @@ DDesktopMenu::DDesktopMenu()
     // 而DDesktopMenu缺少此属性导致Wayland buffer为XRGB格式
     // 缺少的alpha通道似乎导致四角无法透明
     if (WaylandHelper::isWayland()) {
+        // Qt6 Wayland下 Qt::Tool 不再自动处理为无边框
+        // compositor 会给普通 Tool 窗口加 SSD 装饰（方形边框）
+        // 加 FramelessWindowHint 禁止 WM 加边框
+        setWindowFlags(Qt::WindowStaysOnTopHint | Qt::Tool | Qt::FramelessWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
         m_treeland = WaylandHelper::isTreeland();
         setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);

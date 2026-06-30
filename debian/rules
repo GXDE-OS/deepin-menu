@@ -11,4 +11,4 @@
 export QT_SELECT=6
 
 %:
-	dh $@  --parallel
+	dh $@  --parallel --buildsystem=qmake6

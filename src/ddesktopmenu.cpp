@@ -219,10 +219,6 @@ DDesktopMenu::DDesktopMenu()
 {
     setAccessibleName("DesktopMenu");
 
-    // NOTE(hualet): don't change those window flags, if you delete below line, deepin-menu
-    // won't even show working with deepin-terminal2 and dde-launcher.
-    setWindowFlags(Qt::WindowStaysOnTopHint | Qt::Tool);
-
     // Wayland下调整半透明并设置圆角
     // DDockMenu通过DMenuBase已设置WA_TranslucentBackground
     // 而DDesktopMenu缺少此属性导致Wayland buffer为XRGB格式

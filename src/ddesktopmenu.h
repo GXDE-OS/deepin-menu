@@ -49,7 +49,6 @@ protected:
     void showEvent(QShowEvent *e) Q_DECL_OVERRIDE;
     void hideEvent(QHideEvent *e) Q_DECL_OVERRIDE;
     void keyPressEvent(QKeyEvent *event) Q_DECL_OVERRIDE;
-    void paintEvent(QPaintEvent* event) Q_DECL_OVERRIDE;
 
 private:
     QAction *action(const QString &id);
@@ -57,8 +56,6 @@ private:
     DRegionMonitor *m_monitor;
     QList<QMenu*> m_ownMenus;
     QWidget* m_wlMask = nullptr;
-    bool m_wlBlur = false;
-    bool m_treeland = false;
 };
 
 #endif // DDESKTOPMENU_H

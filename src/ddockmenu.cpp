@@ -18,10 +18,7 @@
  */
 
 #include <QPainter>
-#include <QPainterPath>
 #include <QRect>
-#include <QPen>
-#include <QBrush>
 #include <QHBoxLayout>
 #include <QJsonObject>
 #include <QDebug>
@@ -32,8 +29,7 @@
 #include <QWidget>
 #include <QMouseEvent>
 #include <QTimer>
-#include <QPointer>
-#include <QPlatformSurfaceEvent>
+#include <QWindow>
 #include <functional>
 #include <DBlurEffectWidget>
 
@@ -110,23 +106,6 @@ DDockMenu::DDockMenu(DDockMenu *parent)
             destroyAll();
         }
     });
-
-    // treeland 不认 DBlurEffectWidget 走的 KDE blur 协议(它用 personalization), 所以在 treeland 上
-    // DBlurEffectWidget 的半透明背景拿不到合成器模糊, 会渲染成白框。与 GL 不可用/无 blur 窗口一样,
-    // treeland 下也走"不透明深色平背景"兜底 —— 即 wlcom 上那个正常黑菜单的观感。
-    if (WaylandHelper::isWayland()
-        && (!WaylandHelper::isGLWorking() || !m_wmHelper->hasBlurWindow()
-            || WaylandHelper::isTreeland())) {
-        setBackgroundColor(QColor(20, 20, 20));  // 不透明深色,等价于DarkColor的观感
-        // 关掉箭头与阴影:GL 不可用时它们会画成白色直角晕
-        setArrowHeight(0);
-        setArrowWidth(0);
-        setShadowBlurRadius(0);
-        setShadowXOffset(0);
-        setShadowYOffset(0);
-        setRadius(8);
-        m_wlFlatBg = true;
-    }
 }
 
 DDockMenu::~DDockMenu()
@@ -185,36 +164,8 @@ void DDockMenu::showSubMenu(int, int, const QJsonObject &)
 
 }
 
-void DDockMenu::paintEvent(QPaintEvent *event)
-{
-    if (!m_wlFlatBg) {
-        DArrowRectangle::paintEvent(event);
-        return;
-    }
-
-    // 自绘圆角背景, 菜单项由子widget DMenuContent 在其上绘制。
-    // 开启合成器模糊时背景画成半透明深色(透出模糊); 否则不透明深色兜底。
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    QPainterPath path;
-    path.addRoundedRect(rect(), radius(), radius());
-    QColor bg = backgroundColor();
-    if (m_wlBlur) {
-        bg = QColor(20, 20, 20);
-        bg.setAlphaF(0.6);
-    }
-    painter.fillPath(path, QBrush(bg));
-}
-
 bool DDockMenu::event(QEvent *event)
 {
-    if (event->type() == QEvent::PlatformSurface) {
-        auto *se = static_cast<QPlatformSurfaceEvent *>(event);
-        if (se->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
-            scheduleBlur(0); // surface 首次创建时给平背景菜单挂模糊
-        }
-    }
-
     if (event->type() == QEvent::WindowDeactivate) {
         // NOTE(sbw): test if we have mouse handle
         if (rect().contains(mapFromGlobal(QCursor::pos())))
@@ -241,39 +192,9 @@ void DDockMenu::show(int x, int y)
         return;
     }
 
-    const QSize sz = size();
-    QPoint topLeft;
-    switch (arrowDirection()) {
-        case ArrowBottom: {
-            topLeft = QPoint(x - sz.width() / 2, y - sz.height());
-            break;
-        }
-
-        case ArrowTop: {
-            topLeft = QPoint(x - sz.width() / 2, y);
-            break;
-        }
-
-        case ArrowLeft: {
-            topLeft = QPoint(x, y - sz.height() / 2);
-            break;
-        }
-
-        case ArrowRight: {
-            topLeft = QPoint(x - sz.width(), y - sz.height() / 2);
-            break;
-        }
-    }
-
-    const QScreen* scr = qApp->primaryScreen();
-    if (scr) {
-        const QRect g = scr->geometry();
-        topLeft.setX(qBound(g.left(), topLeft.x(), g.right() - sz.width()));
-        topLeft.setY(qBound(g.top(), topLeft.y(), g.bottom() - sz.height()));
-    }
-
-    WaylandHelper::setMenuLayerRole(this, topLeft);
-
+    // Wayland下走标准 xdg_popup。DDockMenu 继承自
+    // DArrowRectangle(FloatWindow) 本身就是 Qt::ToolTip 窗口，
+    // 挂到全屏遮罩(父 surface)上即成为非 grab xdg_popup。
     if (!m_wlMask) {
         WlMaskWidget *mask = new WlMaskWidget;
         mask->setAttribute(Qt::WA_TranslucentBackground);
@@ -283,11 +204,14 @@ void DDockMenu::show(int x, int y)
         m_wlMask = mask;
     }
 
+    QScreen* scr = qApp->primaryScreen();
     if (scr) {
-        m_wlMask->setGeometry(scr->geometry());
+        m_wlMask->createWinId();
+        m_wlMask->windowHandle()->setScreen(scr);
     }
-    WaylandHelper::setFullscreenMaskRole(m_wlMask);
-    m_wlMask->show();
+    m_wlMask->showFullScreen();
+
+    WaylandHelper::attachAsPopup(this, m_wlMask->windowHandle());
 
     DArrowRectangle::show(x, y);
 }
@@ -310,47 +234,7 @@ void DDockMenu::showEvent(QShowEvent *e)
         grabKeyboard();
     });
 
-    // re-show 时 QtWayland 不重建 QPlatformWindow(无 SurfaceCreated 事件), wl_surface 在 show 之后
-    // 才懒重建, 故延迟重试挂模糊直到 surface 就绪。
-    scheduleBlur(0);
-
     DArrowRectangle::showEvent(e);
-}
-
-bool DDockMenu::setupBlur()
-{
-    if (!WaylandHelper::isWayland() || !m_wlFlatBg) {
-        return true; // 非 Wayland / 非平背景路径无需处理
-    }
-    bool ok = false;
-    if (WaylandHelper::isTreeland()) {
-        // treeland: personalization 做背景模糊 + 圆角裁剪(平背景无阴影边距, 整面即菜单, 不会溢出)。
-        ok = WaylandHelper::applyTreelandMenuStyle(this, radius());
-    } else {
-        // 通用 wlroots(kylin-wlcom): KDE blur, 区域为整面菜单矩形。
-        ok = WaylandHelper::enableBlur(this, QRect(0, 0, width(), height()));
-    }
-    if (ok && !m_wlBlur) {
-        m_wlBlur = true;
-        update(); // 改用半透明背景重绘, 透出模糊
-    }
-    return ok;
-}
-
-void DDockMenu::scheduleBlur(int attempt)
-{
-    if (!WaylandHelper::isWayland() || !m_wlFlatBg || m_wlBlur || attempt > 8) {
-        return;
-    }
-    QPointer<DDockMenu> self(this);
-    QTimer::singleShot(0, this, [self, attempt]() {
-        if (!self || !self->isVisible()) {
-            return;
-        }
-        if (!self->setupBlur()) {
-            self->scheduleBlur(attempt + 1);
-        }
-    });
 }
 
 void DDockMenu::hideEvent(QHideEvent *event)

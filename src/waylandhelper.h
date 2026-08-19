@@ -18,22 +18,18 @@
 #ifndef SRC_WAYLANDHELPER_H_
 #define SRC_WAYLANDHELPER_H_
 
-#include <QPoint>
-#include <QRect>
-
 class QWidget;
+class QWindow;
 
 namespace WaylandHelper {
 
 bool isWayland();
-bool isTreeland();
-bool isGLWorking();
-void setMenuLayerRole(QWidget* widget, const QPoint& pos);
-void setFullscreenMaskRole(QWidget* widget);
-bool enableBlur(QWidget* widget, const QRect& region);
-bool applyTreelandMenuStyle(QWidget* widget, int radius);
-bool placeMenuRelativeToWindow(QWidget* widget, int x, int y);
-bool placeMenuAtCursor(QWidget* widget, int yOffset);
+
+// 将 popup 挂到 anchor 的窗口下并设为 ToolTip 类型。
+// Qt6 Wayland 中只有 Qt::ToolTip(非 grab popup) 不需要 input serial
+// 就能走 xdg_popup + xdg_positioner 精确定位；D-Bus 服务拿不到 serial，
+// 所以这是唯一能精确摆放的方式。必须在 popup 显示前调用。
+void attachAsPopup(QWidget *popup, QWindow *anchorWindow);
 
 }  // namespace WaylandHelper
 

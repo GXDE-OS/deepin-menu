@@ -12,13 +12,6 @@ TEMPLATE = app
 CONFIG += c++11 link_pkgconfig
 PKGCONFIG += dtk2widget
 
-# Wayland下使用layer-shell-qt6
-INCLUDEPATH += /usr/include/LayerShellQt
-LIBS += -lLayerShellQtInterface
-
-# Wayland走org_kde_kwin_blur作为模糊协议
-PKGCONFIG += wayland-client
-
 SOURCES += src/main.cpp \
     src/ddesktopmenu.cpp \
     src/utils.cpp \
@@ -30,10 +23,7 @@ SOURCES += src/main.cpp \
     src/ddockmenu.cpp \
     src/dmenuapplication.cpp \
     src/dabstractmenu.cpp \
-    src/waylandhelper.cpp \
-    src/kde-blur-protocol.c \
-    src/treeland-personalization-protocol.c \
-    src/treeland-dde-shell-protocol.c
+    src/waylandhelper.cpp
 
 HEADERS  += \
     src/ddesktopmenu.h \
@@ -46,10 +36,7 @@ HEADERS  += \
     src/ddockmenu.h \
     src/dmenuapplication.h \
     src/dabstractmenu.h \
-    src/waylandhelper.h \
-    src/kde-blur-client-protocol.h \
-    src/treeland-personalization-client-protocol.h \
-    src/treeland-dde-shell-client-protocol.h
+    src/waylandhelper.h
 
 dbus.path = /usr/share/dbus-1/services
 dbus.files = data/com.deepin.menu.service

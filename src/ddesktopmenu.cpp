@@ -30,34 +30,18 @@
 #include <QScreen>
 #include <QCursor>
 #include <QPainter>
-#include <QPainterPath>
-#include <QImage>
 #include <QMouseEvent>
-#include <QStyle>
-#include <QStyleOptionMenuItem>
-#include <QPlatformSurfaceEvent>
-#include <QPointer>
+#include <QWindow>
 #include <functional>
 #include <qpa/qplatformscreen.h>
 
 #include "waylandhelper.h"
 
-// 阴影和圆角在Wayland下不工作，XCB的方案走了qt_blurImage，是QtWidgets导出的内部函数
-// header根本找不着，只能前向声明了
-QT_BEGIN_NAMESPACE
-void qt_blurImage(QPainter* p, QImage& blurImage, qreal radius, bool quality,
-    bool alphaOnly, int transposed = 0);
-QT_END_NAMESPACE
-
 namespace {
 
-// Wayland下手动处理圆角与阴影
-const int kWlRadius = 8;
-const int kWlShadowBlur = 8;
-const int kWlShadowOffsetY = 1;
-const int kWlShadowMargin = 16;
-
-// Wayland下的全屏遮罩
+// Wayland下的全屏遮罩：同时作为 xdg_popup 的父 surface。
+// 非 grab popup 不会在点击外部时自动关闭，遮罩负责接收菜单外的点击。
+// 因为 popup 一定叠在父 surface 之上，遮罩无需额外的 z-order 处理。
 class WlMaskWidget : public QWidget {
 public:
     std::function<void()> onPress;
@@ -74,141 +58,16 @@ protected:
     }
 };
 
-// 非Treeland下的妥协方案
-// 样式/源码参考自X11下的样式
-void drawWlMenuDecoration(QWidget *w, QPainter &painter, bool blurOn) {
-    const QRect content =
-        w->rect().adjusted(0, 0, -kWlShadowMargin, -kWlShadowMargin);
-    QPainterPath bgPath;
-    bgPath.addRoundedRect(content, kWlRadius, kWlRadius);
-
-    painter.setRenderHint(QPainter::Antialiasing);
-
-    QImage shadow(w->size(), QImage::Format_ARGB32_Premultiplied);
-    shadow.fill(Qt::transparent);
-    {
-        QPainter sp(&shadow);
-        sp.setRenderHint(QPainter::Antialiasing);
-        sp.fillPath(bgPath.translated(0, kWlShadowOffsetY), QColor(0, 0, 0));
-    }
-    painter.save();
-    painter.setOpacity(0.18);
-    qt_blurImage(&painter, shadow, kWlShadowBlur * 2.0, true, true);
-    painter.restore();
-
-    QColor bgColor = w->palette().color(QPalette::Window);
-    if (blurOn) {
-        bgColor.setAlphaF(0.6);
-    }
-    painter.fillPath(bgPath, bgColor);
-    painter.strokePath(bgPath, QPen(QColor(0, 0, 0, 20), 1));
-    painter.setClipPath(bgPath);
-}
-
-// Wayland下的子菜单如果还是普通QMenu就很乱飞了，而且样式也不对
-// Wayland下使用这个打补丁的WlSubMenu类
+// Wayland下的子菜单：与主菜单同为非 grab xdg_popup。
+// QMenu 会自动把子菜单的 transient parent 设为主菜单窗口，
+// 这里只需把窗口类型改成 ToolTip 即可走 xdg_popup。
 class WlSubMenu : public QMenu {
 public:
     explicit WlSubMenu(QWidget *parent) : QMenu(parent) {
         if (WaylandHelper::isWayland()) {
-            setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
-            setAttribute(Qt::WA_TranslucentBackground);
-            setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
+            setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
         }
     }
-
-protected:
-    bool event(QEvent *e) override {
-        if (e->type() == QEvent::PlatformSurface) {
-            auto *se = static_cast<QPlatformSurfaceEvent *>(e);
-            if (se->surfaceEventType() ==
-                    QPlatformSurfaceEvent::SurfaceCreated) {
-                setupWayland();
-            }
-        }
-        return QMenu::event(e);
-    }
-
-    void showEvent(QShowEvent *e) override {
-        QMenu::showEvent(e);
-        // re-show时QtWayland不重建QPlatformWindow
-        scheduleSetup(0);
-    }
-
-    void paintEvent(QPaintEvent *e) override {
-        if (!WaylandHelper::isWayland()) {
-            QMenu::paintEvent(e);
-            return;
-        }
-        QPainter painter(this);
-        drawWlMenuDecoration(this, painter, m_wlBlur);
-        for (QAction *action : actions()) {
-            const QRect g = actionGeometry(action);
-            if (g.isEmpty() || !e->rect().intersects(g)) {
-                continue;
-            }
-            QStyleOptionMenuItem opt;
-            initStyleOption(&opt, action);
-            opt.rect = g;
-            style()->drawControl(QStyle::CE_MenuItem, &opt, &painter, this);
-        }
-    }
-
-private:
-    // 应用layer角色 + dde-shell按光标定位 + blur
-    bool setupWayland() {
-        if (!WaylandHelper::isWayland()) {
-            return true;
-        }
-        WaylandHelper::setMenuLayerRole(this, QPoint(0, 0));
-
-        // Treeland优先用personalization，非Treeland则回退到KDE blur
-        if (WaylandHelper::isTreeland()) {
-            m_wlBlur = WaylandHelper::applyTreelandMenuStyle(this, kWlRadius);
-        } else {
-            const QRect blurRegion(0, 0, width() - kWlShadowMargin,
-                height() - kWlShadowMargin);
-            m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
-        }
-
-        // 子菜单定位不能用Qt的global geometry，拿不到真实坐标, 是垃圾
-        // 自行计算
-        QPoint off(width() - kWlShadowMargin, 0);  // 兜底
-        if (QMenu *pm = qobject_cast<QMenu *>(parentWidget())) {
-            QRect ar;
-            for (QAction *a : pm->actions()) {
-                if (a->menu() == this) {
-                    ar = pm->actionGeometry(a);
-                    break;
-                }
-            }
-            off = QPoint(pm->width() - pm->contentsMargins().right(), ar.top());
-        }
-        const bool placed = WaylandHelper::placeMenuRelativeToWindow(this,
-                off.x(), off.y());
-        if (placed) {
-            update();
-        }
-        return placed;
-    }
-
-    // re-show时surface在show之后才就绪, 逐帧重试直到拿到surface(最多若干次)。
-    void scheduleSetup(int attempt) {
-        if (!WaylandHelper::isWayland() || attempt > 8) {
-            return;
-        }
-        QPointer<WlSubMenu> self(this);
-        QTimer::singleShot(0, this, [self, attempt]() {
-            if (!self || !self->isVisible()) {
-                return;
-            }
-            if (!self->setupWayland()) {
-                self->scheduleSetup(attempt + 1);
-            }
-        });
-    }
-
-    bool m_wlBlur = false;
 };
 
 }  // namespace
@@ -219,18 +78,9 @@ DDesktopMenu::DDesktopMenu()
 {
     setAccessibleName("DesktopMenu");
 
-    // Wayland下调整半透明并设置圆角
-    // DDockMenu通过DMenuBase已设置WA_TranslucentBackground
-    // 而DDesktopMenu缺少此属性导致Wayland buffer为XRGB格式
-    // 缺少的alpha通道似乎导致四角无法透明
     if (WaylandHelper::isWayland()) {
-        // Qt6 Wayland下 Qt::Tool 不再自动处理为无边框
-        // compositor 会给普通 Tool 窗口加 SSD 装饰（方形边框）
-        // 加 FramelessWindowHint 禁止 WM 加边框
-        setWindowFlags(Qt::WindowStaysOnTopHint | Qt::Tool | Qt::FramelessWindowHint);
-        setAttribute(Qt::WA_TranslucentBackground);
-        m_treeland = WaylandHelper::isTreeland();
-        setContentsMargins(0, 0, kWlShadowMargin, kWlShadowMargin);
+        // ToolTip 类型 + transient parent 才会被 Qt 当作 xdg_popup 定位。
+        setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
     }
 
     connect(m_monitor, &DRegionMonitor::buttonPress, this, [=] (const QPoint &p) {
@@ -284,13 +134,13 @@ void DDesktopMenu::setItemText(const QString &itemId, const QString &text)
 void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
 {
     QPoint handlePos = pos;
-    if (isScaled) {
-        handlePos = pos * devicePixelRatioF();
-    }
 
     if (!WaylandHelper::isWayland()) {
         // X11下走原逻辑
         // 因为.dde_env已经不包含qt的缩放环境变量，所以收到的都是原始坐标
+        if (isScaled) {
+            handlePos = pos * devicePixelRatioF();
+        }
         QList<QScreen *> oldList = qApp->screens();
         for (auto it = oldList.constBegin(); it != oldList.constEnd(); ++it) {
             QScreen const * currentScreen = (*it);
@@ -306,8 +156,16 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
         return;
     }
 
-    // Wayland下没有父surface的QMenu，xdg_popup没法用（定位错乱问题）
-    // 用layer-shell把菜单锚定，并加全屏遮罩负责「点击外部关闭」
+    // Wayland下走标准 xdg_popup。D-Bus 服务拿不到 input serial，
+    // 用 ToolTip(非 grab popup) + 隐藏父 surface 的方式精确摆放。
+    //
+    // 客户端(gxde-terminal 等 GTK 程序)发送的是 GDK「设备像素」坐标：
+    //   x = event.x_root * gtk_scale / dde_scale
+    // Wayland 下 gtk_scale=2(整数 buffer scale)，而 dde_scale 读的是
+    // QT_SCALE_FACTOR/QT_FONT_DPI(本机均未设置，取 1.0)，于是收到的是
+    // 逻辑坐标的 2 倍。故除以 devicePixelRatioF()(=2) 换回逻辑坐标。
+    handlePos = QPoint(qRound(pos.x() / devicePixelRatioF()),
+                       qRound(pos.y() / devicePixelRatioF()));
     ensurePolished();
     const QSize sz = sizeHint();
 
@@ -316,15 +174,18 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
         scr = qApp->primaryScreen();
     }
 
-    QPoint topLeft = handlePos;
+    const QMargins menuMargins = contentsMargins();
+    QPoint topLeft = handlePos
+        - QPoint(menuMargins.left(), menuMargins.top());
     if (scr) {
         const QRect g = scr->geometry();
         topLeft.setX(qBound(g.left(), topLeft.x(), qMax(g.left(),
-            g.right() - sz.width())));
+            g.right() - sz.width() + 1)));
         topLeft.setY(qBound(g.top(), topLeft.y(), qMax(g.top(),
-            g.bottom() - sz.height())));
+            g.bottom() - sz.height() + 1)));
     }
 
+    // 全屏遮罩兼作父 surface。
     if (!m_wlMask) {
         WlMaskWidget *mask = new WlMaskWidget;
         mask->setAttribute(Qt::WA_TranslucentBackground);
@@ -335,42 +196,22 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     }
 
     if (scr) {
-        m_wlMask->setGeometry(scr->geometry());
+        m_wlMask->createWinId();
+        m_wlMask->windowHandle()->setScreen(scr);
     }
+    m_wlMask->showFullScreen();
 
-    WaylandHelper::setFullscreenMaskRole(m_wlMask);
-    m_wlMask->show();
+    WaylandHelper::attachAsPopup(this, m_wlMask->windowHandle());
 
-    const QPoint anchor = topLeft;
-
-    createWinId();
     resize(sz);
-    WaylandHelper::setMenuLayerRole(this, anchor);
-
-    // 顶层菜单定位: treeland用绝对，其它用相对
-    if (m_treeland) {
-        WaylandHelper::placeMenuAtCursor(this, 0);
-    } else {
-        WaylandHelper::placeMenuRelativeToWindow(this, handlePos.x(), handlePos.y());
-    }
-
-    if (m_treeland) {
-        m_wlBlur = WaylandHelper::applyTreelandMenuStyle(this, kWlRadius);
-    } else {
-        const QRect blurRegion(0, 0, sz.width() - kWlShadowMargin, sz.height() - kWlShadowMargin);
-        m_wlBlur = WaylandHelper::enableBlur(this, blurRegion);
-    }
-
-    QMenu::popup(anchor);
-
-    QMenu::popup(anchor);
+    QMenu::popup(topLeft);
 }
 
 void DDesktopMenu::showEvent(QShowEvent *e)
 {
     QMenu::showEvent(e);
 
-    // Wayland(下DRegionMonitor收不到全局点击，由全屏遮罩负责「点击外部关闭」
+    // Wayland下DRegionMonitor收不到全局点击，由全屏遮罩负责「点击外部关闭」
     if (!WaylandHelper::isWayland()) {
         // X11保持原版逻辑
         m_monitor->registerRegion();
@@ -403,28 +244,6 @@ void DDesktopMenu::keyPressEvent(QKeyEvent *event)
     }
 
     QMenu::keyPressEvent(event);
-}
-
-void DDesktopMenu::paintEvent(QPaintEvent* event) {
-    if (!WaylandHelper::isWayland()) {
-        // X11下圆角与阴影由dxcb设置
-        QMenu::paintEvent(event);
-        return;
-    }
-
-    QPainter painter(this);
-    drawWlMenuDecoration(this, painter, m_wlBlur);
-
-    for (QAction *action : actions()) {
-        const QRect g = actionGeometry(action);
-        if (g.isEmpty() || !event->rect().intersects(g)) {
-            continue;
-        }
-        QStyleOptionMenuItem opt;
-        initStyleOption(&opt, action);
-        opt.rect = g;
-        style()->drawControl(QStyle::CE_MenuItem, &opt, &painter, this);
-    }
 }
 
 QAction *DDesktopMenu::action(const QString &id)

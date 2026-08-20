@@ -1,14 +1,20 @@
+deepin-menu (2:6.0.1) UNRELEASED; urgency=medium
+
+  * Fixed UI issues under new DTK2Widget-Qt6
+
+ -- CharOfString <root@charofstring.cc>  Thu, 20 Aug 2026 15:41:03 +0800
+
 deepin-menu (2:6.0.0) UNRELEASED; urgency=medium
 
   * Migrated to Qt6
 
- -- CharOfString <markus_verify@126.com>  Tue, 30 Jun 2026 15:14:27 +0800
+ -- CharOfString <root@charofstring.cc>  Tue, 30 Jun 2026 15:14:27 +0800
 
 deepin-menu (2:3.5.0) UNRELEASED; urgency=medium
 
   * fix: Wayland下模糊与定位问题
 
- -- CharOfString <markus_verify@126.com>  Sun, 14 Jun 2026 20:15:30 +0800
+ -- CharOfString <root@charofstring.cc>  Sun, 14 Jun 2026 20:15:30 +0800
 
 deepin-menu (2:3.4.9) UNRELEASED; urgency=medium
 

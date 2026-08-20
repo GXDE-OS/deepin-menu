@@ -192,9 +192,34 @@ void DDockMenu::show(int x, int y)
         return;
     }
 
-    // Wayland下走标准 xdg_popup。DDockMenu 继承自
-    // DArrowRectangle(FloatWindow) 本身就是 Qt::ToolTip 窗口，
-    // 挂到全屏遮罩(父 surface)上即成为非 grab xdg_popup。
+    // Wayland下用 layer-shell：dock 菜单不是 toplevel，不会出现在任务栏，
+    // 位置由 layer 边距直接锚定到屏幕坐标，无需 xdg_popup。
+    const QSize sz = size();
+    QPoint topLeft;
+    switch (arrowDirection()) {
+        case ArrowBottom:
+            topLeft = QPoint(x - sz.width() / 2, y - sz.height());
+            break;
+        case ArrowTop:
+            topLeft = QPoint(x - sz.width() / 2, y);
+            break;
+        case ArrowLeft:
+            topLeft = QPoint(x, y - sz.height() / 2);
+            break;
+        case ArrowRight:
+            topLeft = QPoint(x - sz.width(), y - sz.height() / 2);
+            break;
+    }
+
+    const QScreen* scr = qApp->primaryScreen();
+    if (scr) {
+        const QRect g = scr->geometry();
+        topLeft.setX(qBound(g.left(), topLeft.x(), g.right() - sz.width()));
+        topLeft.setY(qBound(g.top(), topLeft.y(), g.bottom() - sz.height()));
+    }
+
+    WaylandHelper::setMenuLayerRole(this, topLeft);
+
     if (!m_wlMask) {
         WlMaskWidget *mask = new WlMaskWidget;
         mask->setAttribute(Qt::WA_TranslucentBackground);
@@ -204,14 +229,11 @@ void DDockMenu::show(int x, int y)
         m_wlMask = mask;
     }
 
-    QScreen* scr = qApp->primaryScreen();
     if (scr) {
-        m_wlMask->createWinId();
-        m_wlMask->windowHandle()->setScreen(scr);
+        m_wlMask->setGeometry(scr->geometry());
     }
-    m_wlMask->showFullScreen();
-
-    WaylandHelper::attachAsPopup(this, m_wlMask->windowHandle());
+    WaylandHelper::setFullscreenMaskRole(m_wlMask);
+    m_wlMask->show();
 
     DArrowRectangle::show(x, y);
 }

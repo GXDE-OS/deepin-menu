@@ -32,6 +32,8 @@
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWindow>
+#include <QPointer>
+#include <QPlatformSurfaceEvent>
 #include <functional>
 #include <qpa/qplatformscreen.h>
 
@@ -39,9 +41,7 @@
 
 namespace {
 
-// Wayland下的全屏遮罩：同时作为 xdg_popup 的父 surface。
-// 非 grab popup 不会在点击外部时自动关闭，遮罩负责接收菜单外的点击。
-// 因为 popup 一定叠在父 surface 之上，遮罩无需额外的 z-order 处理。
+// Wayland下的全屏遮罩：layer-shell「top」层，接收菜单外的点击以关闭菜单。
 class WlMaskWidget : public QWidget {
 public:
     std::function<void()> onPress;
@@ -58,15 +58,62 @@ protected:
     }
 };
 
-// Wayland下的子菜单：与主菜单同为非 grab xdg_popup。
-// QMenu 会自动把子菜单的 transient parent 设为主菜单窗口，
-// 这里只需把窗口类型改成 ToolTip 即可走 xdg_popup。
+// Wayland下的子菜单：与主菜单同为 layer-shell 表面。
+// 定位由 treeland_dde_shell 按「父菜单落点 + 偏移」在合成器端计算。
 class WlSubMenu : public QMenu {
 public:
     explicit WlSubMenu(QWidget *parent) : QMenu(parent) {
         if (WaylandHelper::isWayland()) {
-            setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
+            setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
+            setAttribute(Qt::WA_TranslucentBackground);
         }
+    }
+
+protected:
+    void showEvent(QShowEvent *e) override {
+        QMenu::showEvent(e);
+        if (WaylandHelper::isWayland()) {
+            scheduleSetup(0);
+        }
+    }
+
+private:
+    // 子菜单定位拿不到 Qt 的真实 global geometry，由合成器按偏移计算。
+    bool setupWayland() {
+        WaylandHelper::setMenuLayerRole(this, QPoint(0, 0));
+
+        QPoint off(width(), 0);  // 兜底：贴在父菜单右侧顶部
+        if (QMenu *pm = qobject_cast<QMenu *>(parentWidget())) {
+            QRect ar;
+            for (QAction *a : pm->actions()) {
+                if (a->menu() == this) {
+                    ar = pm->actionGeometry(a);
+                    break;
+                }
+            }
+            if (!ar.isNull()) {
+                off = QPoint(pm->width() - pm->contentsMargins().right(),
+                             ar.top());
+            }
+        }
+
+        return WaylandHelper::placeMenuRelativeToWindow(this, off.x(), off.y());
+    }
+
+    // re-show 时 wl_surface 在 show 之后才就绪，逐帧重试直到拿到 surface。
+    void scheduleSetup(int attempt) {
+        if (attempt > 8) {
+            return;
+        }
+        QPointer<WlSubMenu> self(this);
+        QTimer::singleShot(0, this, [self, attempt]() {
+            if (!self || !self->isVisible()) {
+                return;
+            }
+            if (!self->setupWayland()) {
+                self->scheduleSetup(attempt + 1);
+            }
+        });
     }
 };
 
@@ -79,8 +126,11 @@ DDesktopMenu::DDesktopMenu()
     setAccessibleName("DesktopMenu");
 
     if (WaylandHelper::isWayland()) {
-        // ToolTip 类型 + transient parent 才会被 Qt 当作 xdg_popup 定位。
-        setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
+        // layer-shell 只作用于 toplevel；Qt6 下普通 Tool 会被加 SSD 边框，
+        // 故显式去掉边框。不要改成 ToolTip，那会变成 popup 走不了 layer-shell。
+        setWindowFlags(Qt::WindowStaysOnTopHint | Qt::Tool |
+                       Qt::FramelessWindowHint);
+        setAttribute(Qt::WA_TranslucentBackground);
     }
 
     connect(m_monitor, &DRegionMonitor::buttonPress, this, [=] (const QPoint &p) {
@@ -156,16 +206,8 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
         return;
     }
 
-    // Wayland下走标准 xdg_popup。D-Bus 服务拿不到 input serial，
-    // 用 ToolTip(非 grab popup) + 隐藏父 surface 的方式精确摆放。
-    //
-    // 客户端(gxde-terminal 等 GTK 程序)发送的是 GDK「设备像素」坐标：
-    //   x = event.x_root * gtk_scale / dde_scale
-    // Wayland 下 gtk_scale=2(整数 buffer scale)，而 dde_scale 读的是
-    // QT_SCALE_FACTOR/QT_FONT_DPI(本机均未设置，取 1.0)，于是收到的是
-    // 逻辑坐标的 2 倍。故除以 devicePixelRatioF()(=2) 换回逻辑坐标。
-    handlePos = QPoint(qRound(pos.x() / devicePixelRatioF()),
-                       qRound(pos.y() / devicePixelRatioF()));
+    // Wayland下用 layer-shell 把菜单做成非 toplevel 表面(不出现在任务栏)，
+    // 定位交给 treeland_dde_shell_v1：合成器直接按全局光标摆放右键菜单。
     ensurePolished();
     const QSize sz = sizeHint();
 
@@ -174,9 +216,7 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
         scr = qApp->primaryScreen();
     }
 
-    const QMargins menuMargins = contentsMargins();
-    QPoint topLeft = handlePos
-        - QPoint(menuMargins.left(), menuMargins.top());
+    QPoint topLeft = handlePos;
     if (scr) {
         const QRect g = scr->geometry();
         topLeft.setX(qBound(g.left(), topLeft.x(), qMax(g.left(),
@@ -185,7 +225,7 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
             g.bottom() - sz.height() + 1)));
     }
 
-    // 全屏遮罩兼作父 surface。
+    // 全屏遮罩兼作「点击外部关闭」。
     if (!m_wlMask) {
         WlMaskWidget *mask = new WlMaskWidget;
         mask->setAttribute(Qt::WA_TranslucentBackground);
@@ -196,14 +236,22 @@ void DDesktopMenu::showMenu(const QPoint pos, bool isScaled)
     }
 
     if (scr) {
-        m_wlMask->createWinId();
-        m_wlMask->windowHandle()->setScreen(scr);
+        m_wlMask->setGeometry(scr->geometry());
     }
-    m_wlMask->showFullScreen();
+    WaylandHelper::setFullscreenMaskRole(m_wlMask);
+    m_wlMask->show();
 
-    WaylandHelper::attachAsPopup(this, m_wlMask->windowHandle());
-
+    createWinId();
     resize(sz);
+    WaylandHelper::setMenuLayerRole(this, topLeft);
+
+    // 顶层菜单定位：锁存到全局光标处。DTK 的 DMenuEffect 会给菜单加 18px 阴影边距，
+    // surface 原点比可见面板左上角偏左/偏上 18px，这里传阴影边距的相反数作偏移，
+    // 让合成器把可见面板(而非 surface 原点)精确摆到光标处。
+    WaylandHelper::placeMenuAtCursor(this,
+                                     -contentsMargins().left(),
+                                     -contentsMargins().top());
+
     QMenu::popup(topLeft);
 }
 

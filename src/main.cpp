@@ -22,6 +22,8 @@
 #include <DApplication>
 #include <DLog>
 
+#include <LayerShellQt/Shell>
+
 #include "dbus_manager_adaptor.h"
 #include "manager_object.h"
 #include "dmenuapplication.h"
@@ -36,6 +38,7 @@ int main(int argc, char *argv[])
 {
     if (qgetenv("XDG_SESSION_TYPE") == "wayland") {
         qputenv("QT_QPA_PLATFORM", "wayland");
+        LayerShellQt::Shell::useLayerShell();
     } else {
         DApplication::loadDXcbPlugin();
     }

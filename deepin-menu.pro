@@ -10,7 +10,10 @@ TARGET = deepin-menu
 TEMPLATE = app
 
 CONFIG += c++11 link_pkgconfig
-PKGCONFIG += dtk2widget
+PKGCONFIG += dtk2widget wayland-client
+
+INCLUDEPATH += /usr/include/LayerShellQt
+LIBS += -lLayerShellQtInterface
 
 SOURCES += src/main.cpp \
     src/ddesktopmenu.cpp \
@@ -23,7 +26,8 @@ SOURCES += src/main.cpp \
     src/ddockmenu.cpp \
     src/dmenuapplication.cpp \
     src/dabstractmenu.cpp \
-    src/waylandhelper.cpp
+    src/waylandhelper.cpp \
+    src/treeland-dde-shell-v1-protocol.c
 
 HEADERS  += \
     src/ddesktopmenu.h \

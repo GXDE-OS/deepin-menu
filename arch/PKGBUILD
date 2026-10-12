@@ -1,0 +1,34 @@
+# Maintainer: CharOfString <root@charofstring.cc>
+pkgname=deepin-menu-git
+pkgver=6.0.1
+pkgrel=1
+pkgdesc='Menu service for GXDE (Qt6, DTK2)'
+arch=('x86_64' 'aarch64')
+url="https://github.com/GXDE-OS/deepin-menu"
+license=('GPL-3.0-or-later')
+depends=('dtk2widget-qt6-git' 'dtk6core-git' 'qt6-base' 'layer-shell-qt' 'wayland' 'libx11' 'libxcb'
+         'glib2' 'libgcc' 'libstdc++' 'glibc')
+makedepends=('git')
+provides=('deepin-menu')
+conflicts=('deepin-menu')
+source=()
+sha512sums=()
+
+# 直接使用 PKGBUILD 所在的 git 仓库作为源码 ・ Build from the git checkout this PKGBUILD lives in.
+_srcroot() {
+  git -C "$startdir" rev-parse --show-toplevel
+}
+
+build() {
+  mkdir -p build
+  cd build
+  qmake6 "$(_srcroot)/deepin-menu.pro" \
+    QMAKE_CFLAGS_RELEASE="$CFLAGS" \
+    QMAKE_CXXFLAGS_RELEASE="$CXXFLAGS" \
+    QMAKE_LFLAGS_RELEASE="$LDFLAGS"
+  make
+}
+
+package() {
+  make -C build INSTALL_ROOT="$pkgdir" install
+}
